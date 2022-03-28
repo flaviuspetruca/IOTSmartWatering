@@ -178,15 +178,15 @@ void reconnect() {
     String clientId = "ESP8266Client-";
     clientId += String(random(0xffff), HEX);
     // Attempt to connect
-    if (client.connect(clientId.c_str(), mqtt_username, mqtt_password)) {
+    if (client.connect(clientId.c_str(), mqtt_username, mqtt_password, "infob3it/133/status", 0, true, "DISCONNECTED", true)) {
       Serial.println("connected");
       // Once connected, publish an announcement...
       client.publish("infob3it/133/temperature", "reconnected");
       client.publish("infob3it/133/pressure", "reconnected");
       client.publish("infob3it/133/moisture", "reconnected");
       client.publish("infob3it/133/light", "reconnected");
-      client.publish("infob3it/133/mode", "reconnected");
-      client.publish("infob3it/133/water", "reconnected");
+      client.publish("infob3it/133/mode", "reconnected", false);
+      client.publish("infob3it/133/water", "reconnected", false);
       client.publish("infob3it/133/refresh", "reconnected");
       // ... and resubscribe
       client.subscribe("infob3it/133/water");
@@ -449,7 +449,7 @@ void btnPressChecker() {
 // --------Publish Data
 void publishTemperature() {
   StaticJsonDocument<256> temp;
-  temp["temperature"] = temperature;
+  temp["temperature"] = String(temperature, 2);
   temp["id"] = value;
   char buffer[256];
   serializeJson(temp, buffer);
@@ -460,7 +460,7 @@ void publishTemperature() {
 
 void publishPressure() {
   StaticJsonDocument<256> pres;
-  pres["pressure"] = pressure;
+  pres["pressure"] = String(pressure,2);
   pres["id"] = value;
   char buffer[256];
   serializeJson(pres, buffer);
