@@ -40,8 +40,8 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 Adafruit_BMP280 bmp; // I2C
 
 
-const int initialPositionServo = 0;
-const int wateringPosition = 90;
+const int initialPositionServo = 90;
+const int wateringPosition = 0;
 
 // PINS
 const int selPin = D7;
@@ -67,7 +67,6 @@ const int btnInterval = 500;
 const int wateringInterval = 5000;
 const int screenInterval = 4000;
 const int aboutToWater = 350;
-
 // Sensor values
 int lastMoistureValue = -1;
 int lastLightValue = 0;
@@ -107,17 +106,6 @@ void setup_wifi() {
   Serial.println(WiFi.localIP());
 }
 
-void publishMode(String modeValue) {
-  StaticJsonDocument<256> modeJSON;
-  modeJSON["mode"] = modeValue;
- 
-  char buffer[256];
-  serializeJson(modeJSON, buffer);
-  if (client.publish("infob3it/133/mode", buffer)) {
-    Serial.println("Pubished " + modeValue);
-  }
-}
-
 void callback(char* topic, byte* payload, unsigned int length) {
   Serial.print("Message arrived [");
   Serial.print(topic);
@@ -129,13 +117,13 @@ void callback(char* topic, byte* payload, unsigned int length) {
   String topicString = String(topic);
   
   if (topicString == "infob3it/133/water"){
-    changeMode(MANUAL);
     StaticJsonDocument<256> doc;
     char value[32] = "";
     deserializeJson(doc, payload, length);
     strlcpy(value, doc["water"] | "default", sizeof(value));
     Serial.println(value);
     if (doc["water"] == "true") {
+      changeMode(MANUAL);
       water();
     } else if (doc["water"] == "false") {
       if (wateringState) {
@@ -178,20 +166,30 @@ void reconnect() {
     String clientId = "ESP8266Client-";
     clientId += String(random(0xffff), HEX);
     // Attempt to connect
-    if (client.connect(clientId.c_str(), mqtt_username, mqtt_password, "infob3it/133/status", 0, true, "DISCONNECTED", true)) {
+    StaticJsonDocument<256> reconnected;
+    reconnected["reconnected"] = "false";
+    char buffer[256];
+    serializeJson(reconnected, buffer);
+    if (client.connect(clientId.c_str(), mqtt_username, mqtt_password, "infob3it/133/status", 0, true, buffer, true)) {
       Serial.println("connected");
       // Once connected, publish an announcement...
-      client.publish("infob3it/133/temperature", "reconnected");
-      client.publish("infob3it/133/pressure", "reconnected");
-      client.publish("infob3it/133/moisture", "reconnected");
-      client.publish("infob3it/133/light", "reconnected");
-      client.publish("infob3it/133/mode", "reconnected", false);
-      client.publish("infob3it/133/water", "reconnected", false);
-      client.publish("infob3it/133/refresh", "reconnected");
+      reconnected["reconnected"] = "true";
+      serializeJson(reconnected, buffer);
+      client.publish("infob3it/133/temperature", buffer);
+      client.publish("infob3it/133/pressure", buffer);
+      client.publish("infob3it/133/moisture", buffer);
+      client.publish("infob3it/133/light", buffer);
+      client.publish("infob3it/133/mode", buffer, false);
+      client.publish("infob3it/133/water", buffer, false);
+      client.publish("infob3it/133/refresh", buffer);
+      client.publish("infob3it/133/status", buffer, true);
       // ... and resubscribe
       client.subscribe("infob3it/133/water");
       client.subscribe("infob3it/133/mode");
       client.subscribe("infob3it/133/refresh");
+
+      // reinitializing the mode in case of disconnect
+      publishMode(currentMode);
     } else {
       Serial.print("failed, rc=");
       Serial.print(client.state());
@@ -247,7 +245,6 @@ void setup() {
   setup_wifi();
   client.setServer(mqtt_server, 1883);
   client.setCallback(callback);
-    
   while ( !Serial ) delay(100);   // wait for native usb
   setupScreen();
 }
@@ -356,7 +353,7 @@ void displayTempPress() {
   display.display(); 
 }
 
-String milisToTime(unsigned long milliseconds) {
+String millisToTime(unsigned long milliseconds) {
   unsigned long allSeconds = milliseconds/1000;
   int runHours = allSeconds/3600;
   int secsRemaining = allSeconds%3600;
@@ -369,14 +366,14 @@ String milisToTime(unsigned long milliseconds) {
 }
 
 void displayLastWateringTime() {
-  String timeToDisplay = milisToTime(millis() - lastWateringTime);
+  String timeToDisplay = millisToTime(millis() - lastWateringTime);
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(WHITE);
   display.setCursor(0, 0);
   display.println("Last watered: ");
   display.println(timeToDisplay + " ago");
-  if (lastMoistureValue < aboutToWater && millis() - lastWateringTime >=  betweenWatering + 20000) {
+  if (lastMoistureValue < aboutToWater && millis() - lastWateringTime >=  betweenWatering + 20000 && currentMode == AUTOMATIC) {
     display.println("ABOUT TO WATER");
   }
   display.display();
@@ -418,6 +415,7 @@ void modeChecker(){
 }
 
 void changeMode(String modeValue) {
+  Serial.println(modeValue);
   lastMode = currentMode;
   if (modeValue == "") {
     if (currentMode == AUTOMATIC) {
@@ -503,6 +501,17 @@ void publishHasRefreshed() {
   serializeJson(refresh, buffer);
   if(client.publish("infob3it/133/refresh", buffer)) {
     Serial.println("Confirmation sent!");
+  }
+}
+
+void publishMode(String modeValue) {
+  StaticJsonDocument<256> modeJSON;
+  modeJSON["mode"] = modeValue;
+ 
+  char buffer[256];
+  serializeJson(modeJSON, buffer);
+  if (client.publish("infob3it/133/mode", buffer)) {
+    Serial.println("Pubished " + modeValue);
   }
 }
 
