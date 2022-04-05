@@ -1,4 +1,3 @@
-#include <SPI.h>
 #include <Wire.h>
 #include <Servo.h>
 #include <Adafruit_GFX.h>
@@ -6,14 +5,15 @@
 #include <Adafruit_BMP280.h>
 #include <ArduinoJson.h>
 #include <ESP8266WiFi.h>
+#include <ESP8266mDNS.h>
+#include <WiFiUdp.h>
+#include <ArduinoOTA.h>
 #include <PubSubClient.h>
+#include <EEPROM.h>
+#include <WiFiManager.h>  
 //-----------------------------------Network
 
-const char* ssid = "GNXA986C1";
-const char* password = "973HJY42M2VF";
 const char* mqtt_server = "mqtt.uu.nl";
-const char* mqtt_username = "student133";
-const char* mqtt_password = "FDQrVK7m";
 
 WiFiClient espClient;
 PubSubClient client(espClient);
@@ -36,6 +36,8 @@ Servo myservo;  // create servo object to control a servo
 #define BMP_MOSI (11)
 #define BMP_CS   (10)
 
+#define EEPROM_SIZE 512
+
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 Adafruit_BMP280 bmp; // I2C
 
@@ -47,6 +49,7 @@ const int wateringPosition = 0;
 const int selPin = D7;
 const int analogPin = A0;
 const int flashBtn = D3;
+const int waterContainerLed = D8;
 
 // STATES
 int lastButtonState = LOW;
@@ -61,7 +64,10 @@ unsigned long lastScreenChangeTime = 0;
 unsigned long betweenWatering = 60000;
 unsigned long soilInterval = 60000;
 unsigned long startedWatering = 0;
+unsigned long startedWateringUpdate = 0;
 unsigned long lastWateringTime = 0;
+unsigned long lastWaterCheck = 0;
+const int waterCheckInterval = 1000;
 const int dataInterval = 2000;
 const int btnInterval = 500;
 const int wateringInterval = 5000;
@@ -77,27 +83,74 @@ float pressure = 0;
 int screen = 1;
 int nrOfScreens = 3;
 
+int currentWaterLeft;
+const int containerSize = 1500;
+const int mlPerSec = 30;
+bool waterLedState = false;
+int waterLedInterval = 1500;
+unsigned long lastHighLed = 0;
+
 #define AUTOMATIC "AUTOMATIC"
 #define MANUAL "MANUAL"
 String currentMode = AUTOMATIC;
 String lastMode = AUTOMATIC;
 
 void setup_wifi() {
-
+  EEPROM.begin(EEPROM_SIZE);
+  String eeprom_ssid;
+  String eeprom_password;
+  for (int i = 0 ; i < 32 ; i++) {
+    eeprom_ssid += char(EEPROM.read(i));
+  }
+  for (int i = 32 ; i < 96 ; i++) {
+    eeprom_password += char(EEPROM.read(i));
+  }
+  EEPROM.end();
+  
   delay(10);
   // We start by connecting to a WiFi network
   Serial.println();
   Serial.print("Connecting to ");
-  Serial.println(ssid);
+  Serial.println(eeprom_ssid);
+  
+  WiFi.begin(eeprom_ssid.c_str(), eeprom_password.c_str());
 
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(ssid, password);
-
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
+  while (WiFi.waitForConnectResult() != WL_CONNECTED) {
+    delay(5000);
     Serial.print(".");
+    ESP.restart();
   }
-
+  ArduinoOTA.setPassword("strong_password");
+  ArduinoOTA.onStart([]() {
+    String type;
+    if (ArduinoOTA.getCommand() == U_FLASH) {
+      type = "sketch";
+    } else { // U_FS
+      type = "filesystem";
+    }
+    Serial.println("Start updating " + type);
+  });
+  ArduinoOTA.onEnd([]() {
+    Serial.println("\nEnd");
+  });
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+  });
+  ArduinoOTA.onError([](ota_error_t error) {
+    Serial.printf("Error[%u]: ", error);
+    if (error == OTA_AUTH_ERROR) {
+      Serial.println("Auth Failed");
+    } else if (error == OTA_BEGIN_ERROR) {
+      Serial.println("Begin Failed");
+    } else if (error == OTA_CONNECT_ERROR) {
+      Serial.println("Connect Failed");
+    } else if (error == OTA_RECEIVE_ERROR) {
+      Serial.println("Receive Failed");
+    } else if (error == OTA_END_ERROR) {
+      Serial.println("End Failed");
+    }
+  });
+  ArduinoOTA.begin();
   randomSeed(micros());
 
   Serial.println("");
@@ -156,6 +209,15 @@ void callback(char* topic, byte* payload, unsigned int length) {
       refreshData();
     } 
   }
+
+  if (topicString == "infob3it/133/waterLeft"){
+    StaticJsonDocument<256> doc;
+    char value[32] = "";
+    deserializeJson(doc, payload, length);
+    strlcpy(value, doc["water"] | "default", sizeof(value));
+    currentWaterLeft = atoi(value);
+    Serial.println(currentWaterLeft);
+  }
 }
 
 void reconnect() {
@@ -170,14 +232,26 @@ void reconnect() {
     reconnected["reconnected"] = "false";
     char buffer[256];
     serializeJson(reconnected, buffer);
-    if (client.connect(clientId.c_str(), mqtt_username, mqtt_password, "infob3it/133/status", 0, true, buffer, true)) {
+    
+    EEPROM.begin(EEPROM_SIZE);
+    String mqtt_username;
+    String mqtt_password;
+    for (int i = 96 ; i < 112 ; i++) {
+      mqtt_username += char(EEPROM.read(i));
+    }
+    for (int i = 112 ; i < 136 ; i++) {
+      mqtt_password += char(EEPROM.read(i));
+    }
+    EEPROM.end();
+    
+    if (client.connect(clientId.c_str(), mqtt_username.c_str(), mqtt_password.c_str(), "infob3it/133/status", 0, true, buffer, true)) {
       Serial.println("connected");
       // Once connected, publish an announcement...
       reconnected["reconnected"] = "true";
       serializeJson(reconnected, buffer);
       client.publish("infob3it/133/temperature", buffer);
       client.publish("infob3it/133/pressure", buffer);
-      client.publish("infob3it/133/moisture", buffer);
+      client.publish("infob3it/133/moisture", buffer, true);
       client.publish("infob3it/133/light", buffer);
       client.publish("infob3it/133/mode", buffer, false);
       client.publish("infob3it/133/water", buffer, false);
@@ -187,6 +261,7 @@ void reconnect() {
       client.subscribe("infob3it/133/water");
       client.subscribe("infob3it/133/mode");
       client.subscribe("infob3it/133/refresh");
+      client.subscribe("infob3it/133/waterLeft");
 
       // reinitializing the mode in case of disconnect
       publishMode(currentMode);
@@ -231,6 +306,35 @@ void setupServo() {
   myservo.attach(D6);
   myservo.write(initialPositionServo); // reset servo to the original position
 }
+
+void setupEEPROM() {
+  String ssid = "GNXA986C1";
+  String password = "973HJY42M2VF";
+  String mqtt_username = "student133";
+  String mqtt_password = "FDQrVK7m";
+
+  EEPROM.begin(EEPROM_SIZE);
+  for (int i = 0; i < 96; i++) {
+    EEPROM.put(i, 0);
+  }
+  for (int i = 0 ; i < 32 ; i++) {
+    EEPROM.put(i, ssid[i]);
+  }
+  for (int i = 32 ; i < 96 ; i++) {
+    EEPROM.put(i, password[i - 32]);
+  }
+  
+  for (int i = 96 ; i < 112 ; i++) {
+    EEPROM.put(i, mqtt_username[i - 96]);
+  }
+
+  for (int i = 112 ; i < 136 ; i++) {
+    EEPROM.put(i, mqtt_password[i - 112]);
+  }
+  EEPROM.commit();
+  EEPROM.end();
+}
+
 void setup() {
   Serial.begin(9600);
   Wire.begin(D2,D1);
@@ -238,7 +342,9 @@ void setup() {
   pinMode(selPin, OUTPUT);
   pinMode(flashBtn, INPUT);
   pinMode(LED_BUILTIN, OUTPUT); 
+  pinMode(D8, OUTPUT); 
   digitalWrite(LED_BUILTIN, HIGH);
+  //setupEEPROM();
   setupServo();
   setupBmp();
   
@@ -263,24 +369,34 @@ int getLight() {
 //Function that gets moisture data. Only once a minute and setting the pin back to Low to avoid corrosion.
 int getSoilMoisture(bool refresh) {
   int soilMoisture;
+  int avg = 0;
   if (millis() - lastSoilMeasureTime >= soilInterval || lastSoilMeasureTime == 0 || refresh == true) {
     digitalWrite(selPin, HIGH);
     delay(100);
-    soilMoisture = analogRead(analogPin);
+    for(int i = 0 ; i < 3 ; i++) {
+      soilMoisture = analogRead(analogPin);
+      avg += soilMoisture;  
+    }
     digitalWrite(analogPin, LOW);
+    avg /= 3;
     lastSoilMeasureTime = millis();
-    lastMoistureValue = soilMoisture;
+    lastMoistureValue = avg;
     checkPossibleWater(); //calling this function only when retrieving a new value. the function also checks if its time for watering
-    return soilMoisture;
+    return avg;
   }
   return -1;
 }
 
 //-------------------WATERING EVENTS
 void water() {
-  startedWatering = millis();
-  wateringState = true;
-  myservo.write(wateringPosition);
+  if (currentWaterLeft == 0) {
+    startedWatering = millis();
+    stopWatering();
+  } else {
+      startedWatering = startedWateringUpdate = millis();
+      wateringState = true;
+      myservo.write(wateringPosition);
+  }
 }
 
 void stopWatering() {
@@ -291,7 +407,11 @@ void stopWatering() {
 
 //Function to stop watering, only in automatic mode
 void stopWateringChecker() {
-  if (millis() - startedWatering >= wateringInterval && wateringState && currentMode == AUTOMATIC) {
+  int temperatureDelay = 0;
+  if (temperature <= 20) {
+    temperatureDelay = 1;
+  }
+  if (millis() - startedWatering >= wateringInterval - temperatureDelay && wateringState && currentMode == AUTOMATIC) {
     stopWatering();
   }
 }
@@ -302,11 +422,40 @@ void checkPossibleWater(){
     return;
   }
   // check if moisture is low and time passed after last watering, for the sensor to get the data
-  if (lastMoistureValue < 250 && lastMoistureValue != -1 && millis() - lastWateringTime >=  betweenWatering) { 
+  if (lastMoistureValue < 250 && lastMoistureValue != -1 && millis() - lastWateringTime >=  betweenWatering && lastLightValue < 400) { 
     if (!wateringState){
       water();
     } 
   }
+}
+
+void checkDecreasingWaterLevel() {
+  unsigned long now = millis();
+  if (wateringState && now - lastWaterCheck >= waterCheckInterval) {
+    Serial.println(currentWaterLeft - ((now - startedWateringUpdate) / 1000) * mlPerSec);
+    if (currentWaterLeft >= ((now - startedWateringUpdate) / 1000) * mlPerSec) {
+      currentWaterLeft -= ((now - startedWateringUpdate) / 1000) * mlPerSec;
+      startedWateringUpdate = lastWaterCheck = now;
+      publishWaterLeft(); 
+    } else {
+      currentWaterLeft = 0;
+      startedWateringUpdate = lastWaterCheck = now;
+      publishWaterLeft(); 
+    }
+  }
+}
+void checkLowWater() {
+   if (currentWaterLeft < 200) {
+      waterLedState = true;
+      if (nrOfScreens <= 3) {
+        nrOfScreens++;
+      }
+   } else {
+      waterLedState = false;
+      if (nrOfScreens > 3) {
+        nrOfScreens--;
+      }
+   }
 }
 
 
@@ -326,6 +475,9 @@ void displayScreen() {
     case 3:
       displayLastWateringTime();
       break;
+    case 4:
+      displayLowWater();
+      break;
     default:
       displayTempPress();
       break;
@@ -343,14 +495,32 @@ void displayWatering() {
 
 void displayTempPress() {
   display.clearDisplay();
+ 
+  // display temperature
   display.setTextSize(1);
-  display.setTextColor(WHITE);
-  display.setCursor(0, 0);
-  display.println("Temperature: ");
-  display.println(String(temperature , 3) + " C");
-  display.println("Pressure");
-  display.println(String(pressure , 3) + " Pa");
-  display.display(); 
+  display.setCursor(0,0);
+  display.print("Temperature: ");
+  display.setTextSize(2);
+  display.setCursor(0,10);
+  display.print(String(temperature, 3));
+  display.print(" ");
+  display.setTextSize(1);
+  display.cp437(true);
+  display.write(167);
+  display.setTextSize(2);
+  display.print("C");
+  
+  // display pressure
+  display.setTextSize(1);
+  display.setCursor(0, 35);
+  display.print("Pressure: ");
+  display.setTextSize(2);
+  display.setCursor(0, 45);
+  display.print(String(pressure, 2));
+  display.setTextSize(1);
+  display.print("Pa"); 
+  
+  display.display();
 }
 
 String millisToTime(unsigned long milliseconds) {
@@ -369,10 +539,14 @@ void displayLastWateringTime() {
   String timeToDisplay = millisToTime(millis() - lastWateringTime);
   display.clearDisplay();
   display.setTextSize(1);
-  display.setTextColor(WHITE);
   display.setCursor(0, 0);
   display.println("Last watered: ");
-  display.println(timeToDisplay + " ago");
+  display.setTextSize(2);
+  display.setCursor(0,10);
+  display.print(timeToDisplay);
+  display.setTextSize(1);
+  display.print(" ago");
+  display.setCursor(0, 45);
   if (lastMoistureValue < aboutToWater && millis() - lastWateringTime >=  betweenWatering + 20000 && currentMode == AUTOMATIC) {
     display.println("ABOUT TO WATER");
   }
@@ -382,13 +556,32 @@ void displayLastWateringTime() {
 void displayMoistureAndLight() {
   display.clearDisplay();
   display.setTextSize(1);
-  display.setTextColor(WHITE);
-  display.setCursor(0, 0);
-  display.println("Moisture: ");
-  display.println(lastMoistureValue);
-  display.println("Light");
-  display.println(lastLightValue);
-  display.display(); 
+  display.setCursor(0,0);
+  display.print("Moisture: ");
+  display.setTextSize(2);
+  display.setCursor(0,10);
+  display.print(lastMoistureValue);
+  
+  display.setTextSize(1);
+  display.setCursor(0, 35);
+  display.print("Light: ");
+  display.setTextSize(2);
+  display.setCursor(0, 45);
+  display.print(lastLightValue);
+  
+  display.display();
+}
+
+void displayLowWater() {
+  display.clearDisplay();
+  display.setTextSize(2);
+  display.setCursor(0,0);
+  if (currentWaterLeft == 0) {
+    display.print("EMPTY");
+  } else {
+    display.print("LOW WATER");
+  }
+  display.display();
 }
 
 //Function creates a carousel of the different screens with different sensor values and data
@@ -487,7 +680,7 @@ void publishMoisture(int currentMoisture) {
   char buffer[256];
   serializeJson(soil, buffer);
   if (currentMoisture != -1) {
-    if(client.publish("infob3it/133/moisture", buffer)) {
+    if(client.publish("infob3it/133/moisture", buffer, true)) {
       Serial.println("Pubished #" + String(value));
     }
   }
@@ -515,6 +708,15 @@ void publishMode(String modeValue) {
   }
 }
 
+void publishWaterLeft() {
+  StaticJsonDocument<256> water;
+  water["water"] = String(currentWaterLeft);
+  char buffer[256];
+  serializeJson(water, buffer);
+  if(client.publish("infob3it/133/waterLeft", buffer, true)) {
+    Serial.println("Water updated!");
+  }
+}
 
 //Function that refreshed data bases on incoming message from topic refresh
 void refreshData() {
@@ -549,7 +751,20 @@ void readAndSendData() {
   }
 }
 
+void blinkWaterLed() {
+  if (waterLedState && millis() - lastHighLed >= waterLedInterval) {
+    digitalWrite(D8, HIGH);
+    lastHighLed = millis();
+  } else {
+    digitalWrite(D8, LOW);
+  }
+}
+
 void loop() {
+  ArduinoOTA.handle();
+  checkDecreasingWaterLevel();
+  checkLowWater();
+  blinkWaterLed();
   modeChecker();
   stopWateringChecker();
   btnPressChecker();
