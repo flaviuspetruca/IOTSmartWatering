@@ -11,26 +11,27 @@
 #include <PubSubClient.h>
 #include <EEPROM.h>
 #include <WiFiManager.h>  
+
 //-----------------------------------Network
 
 const char* mqtt_server = "mqtt.uu.nl";
-
 WiFiClient espClient;
+WiFiManager wm;
 PubSubClient client(espClient);
 unsigned long lastMsg = 0;
 #define MSG_BUFFER_SIZE  (50)
 char msg[MSG_BUFFER_SIZE];
 int value = 0;
 
-
-Servo myservo;  // create servo object to control a servo
-
+// OLED
 #define SCREEN_WIDTH 128 // OLED display width, in pixels
 #define SCREEN_HEIGHT 64 // OLED display height, in pixels
 
 #define OLED_RESET     -1 // Reset pin # (or -1 if sharing Arduino reset pin)
 #define SCREEN_ADDRESS 0x3C ///< See datasheet for Address; 0x3D for 128x64, 0x3C for 128x32
 
+
+// BMP
 #define BMP_SCK  (13)
 #define BMP_MISO (12)
 #define BMP_MOSI (11)
@@ -41,7 +42,8 @@ Servo myservo;  // create servo object to control a servo
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 Adafruit_BMP280 bmp; // I2C
 
-
+//Servo
+Servo myservo;  // create servo object to control a servo
 const int initialPositionServo = 90;
 const int wateringPosition = 0;
 
@@ -83,6 +85,8 @@ float pressure = 0;
 int screen = 1;
 int nrOfScreens = 3;
 
+
+// Container and water left
 int currentWaterLeft;
 const int containerSize = 1500;
 const int mlPerSec = 30;
@@ -90,36 +94,13 @@ bool waterLedState = false;
 int waterLedInterval = 1500;
 unsigned long lastHighLed = 0;
 
+// MODES
 #define AUTOMATIC "AUTOMATIC"
 #define MANUAL "MANUAL"
 String currentMode = AUTOMATIC;
 String lastMode = AUTOMATIC;
 
-void setup_wifi() {
-  EEPROM.begin(EEPROM_SIZE);
-  String eeprom_ssid;
-  String eeprom_password;
-  for (int i = 0 ; i < 32 ; i++) {
-    eeprom_ssid += char(EEPROM.read(i));
-  }
-  for (int i = 32 ; i < 96 ; i++) {
-    eeprom_password += char(EEPROM.read(i));
-  }
-  EEPROM.end();
-  
-  delay(10);
-  // We start by connecting to a WiFi network
-  Serial.println();
-  Serial.print("Connecting to ");
-  Serial.println(eeprom_ssid);
-  
-  WiFi.begin(eeprom_ssid.c_str(), eeprom_password.c_str());
-
-  while (WiFi.waitForConnectResult() != WL_CONNECTED) {
-    delay(5000);
-    Serial.print(".");
-    ESP.restart();
-  }
+void setupOTA() {
   ArduinoOTA.setPassword("strong_password");
   ArduinoOTA.onStart([]() {
     String type;
@@ -152,6 +133,36 @@ void setup_wifi() {
   });
   ArduinoOTA.begin();
   randomSeed(micros());
+}
+
+void setup_wifi() {
+  //eeprom auth in case WIFIManger does not work
+  /*EEPROM.begin(EEPROM_SIZE);
+  String eeprom_ssid;
+  String eeprom_password;
+  for (int i = 0 ; i < 32 ; i++) {
+    eeprom_ssid += char(EEPROM.read(i));
+  }
+  for (int i = 32 ; i < 96 ; i++) {
+    eeprom_password += char(EEPROM.read(i));
+  }
+  EEPROM.end();
+  // We start by connecting to a WiFi network
+  Serial.println();
+  Serial.print("Connecting to ");
+  Serial.println(eeprom_ssid);*/
+  if(wm.autoConnect("AutoConnectAP", "strong_password")) {
+    Serial.println("connected");
+  }
+  //WiFi.begin(eeprom_ssid.c_str(), eeprom_password.c_str());
+
+  setupOTA();
+  
+  while (WiFi.waitForConnectResult() != WL_CONNECTED) {
+    delay(5000);
+    Serial.print(".");
+    ESP.restart();
+  }
 
   Serial.println("");
   Serial.println("WiFi connected");
@@ -159,16 +170,9 @@ void setup_wifi() {
   Serial.println(WiFi.localIP());
 }
 
-void callback(char* topic, byte* payload, unsigned int length) {
-  Serial.print("Message arrived [");
-  Serial.print(topic);
-  Serial.print("] ");
-  for (int i = 0; i < length; i++) {
-    Serial.print((char)payload[i]);
-  }
-  Serial.println();
-  String topicString = String(topic);
-  
+
+// Incoming messages
+void incomingWaterMessage(String topicString, byte* payload, unsigned int length) {
   if (topicString == "infob3it/133/water"){
     StaticJsonDocument<256> doc;
     char value[32] = "";
@@ -185,7 +189,9 @@ void callback(char* topic, byte* payload, unsigned int length) {
     }
     publishMode(MANUAL);
   }
+}
 
+void incomingModeMessage(String topicString, byte* payload, unsigned int length) {
   if (topicString == "infob3it/133/mode"){
     StaticJsonDocument<256> doc;
     char value[32] = "";
@@ -198,7 +204,9 @@ void callback(char* topic, byte* payload, unsigned int length) {
       changeMode(MANUAL);
     }
   }
+}
 
+void incomingRefreshMessage(String topicString, byte* payload, unsigned int length) {
   if (topicString == "infob3it/133/refresh"){
     StaticJsonDocument<256> doc;
     char value[32] = "";
@@ -209,7 +217,9 @@ void callback(char* topic, byte* payload, unsigned int length) {
       refreshData();
     } 
   }
+}
 
+void incomingWaterLeftMessage(String topicString, byte* payload, unsigned int length) {
   if (topicString == "infob3it/133/waterLeft"){
     StaticJsonDocument<256> doc;
     char value[32] = "";
@@ -218,6 +228,22 @@ void callback(char* topic, byte* payload, unsigned int length) {
     currentWaterLeft = atoi(value);
     Serial.println(currentWaterLeft);
   }
+}
+
+void callback(char* topic, byte* payload, unsigned int length) {
+  Serial.print("Message arrived [");
+  Serial.print(topic);
+  Serial.print("] ");
+  for (int i = 0; i < length; i++) {
+    Serial.print((char)payload[i]);
+  }
+  Serial.println();
+  String topicString = String(topic);
+  
+  incomingWaterMessage(topicString, payload, length);
+  incomingModeMessage(topicString, payload, length);
+  incomingRefreshMessage(topicString, payload, length);
+  incomingWaterLeftMessage(topicString, payload, length);
 }
 
 void reconnect() {
@@ -232,7 +258,8 @@ void reconnect() {
     reconnected["reconnected"] = "false";
     char buffer[256];
     serializeJson(reconnected, buffer);
-    
+
+    //get mqtt credentials
     EEPROM.begin(EEPROM_SIZE);
     String mqtt_username;
     String mqtt_password;
@@ -243,27 +270,25 @@ void reconnect() {
       mqtt_password += char(EEPROM.read(i));
     }
     EEPROM.end();
-    
+
+    //connect to mqtt broker, last Will and Testament to status, QOS0, Retain message true, using clean sessions
     if (client.connect(clientId.c_str(), mqtt_username.c_str(), mqtt_password.c_str(), "infob3it/133/status", 0, true, buffer, true)) {
       Serial.println("connected");
-      // Once connected, publish an announcement...
       reconnected["reconnected"] = "true";
       serializeJson(reconnected, buffer);
-      client.publish("infob3it/133/temperature", buffer);
       client.publish("infob3it/133/pressure", buffer);
+      client.publish("infob3it/133/temperature", buffer);
       client.publish("infob3it/133/moisture", buffer, true);
       client.publish("infob3it/133/light", buffer);
       client.publish("infob3it/133/mode", buffer, false);
       client.publish("infob3it/133/water", buffer, false);
       client.publish("infob3it/133/refresh", buffer);
       client.publish("infob3it/133/status", buffer, true);
-      // ... and resubscribe
+   
       client.subscribe("infob3it/133/water");
       client.subscribe("infob3it/133/mode");
       client.subscribe("infob3it/133/refresh");
       client.subscribe("infob3it/133/waterLeft");
-
-      // reinitializing the mode in case of disconnect
       publishMode(currentMode);
     } else {
       Serial.print("failed, rc=");
@@ -294,7 +319,6 @@ void setupBmp() {
 }
 
 void setupScreen() {
-  // SSD1306_SWITCHCAPVCC = generate display voltage from 3.3V internally
   if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
     Serial.println(F("SSD1306 allocation failed"));
     for(;;); // Don't proceed, loop forever
@@ -417,7 +441,7 @@ void stopWateringChecker() {
 }
 
 //Function checks for the right time to water, only if in AUTOMATIC MODE
-void checkPossibleWater(){
+void checkPossibleWater() {
   if (currentMode == MANUAL) {
     return;
   }
@@ -599,7 +623,7 @@ void screenSwapper() {
 
 //------------LOOP EVENTS
 //Function to check mode in order to change built in led state
-void modeChecker(){
+void modeChecker() {
   if (currentMode == AUTOMATIC) {
     digitalWrite(LED_BUILTIN, LOW);
   } else {
@@ -686,7 +710,7 @@ void publishMoisture(int currentMoisture) {
   }
 }
 
-//Function that confirms that the sensors have been updated
+//Function that confirms that the sensors have been updated by sending back a message
 void publishHasRefreshed() {
   StaticJsonDocument<256> refresh;
   refresh["refresh"] = "false";
@@ -751,6 +775,7 @@ void readAndSendData() {
   }
 }
 
+// Water container low on water make led blink
 void blinkWaterLed() {
   if (waterLedState && millis() - lastHighLed >= waterLedInterval) {
     digitalWrite(D8, HIGH);
@@ -761,6 +786,7 @@ void blinkWaterLed() {
 }
 
 void loop() {
+  wm.process();
   ArduinoOTA.handle();
   checkDecreasingWaterLevel();
   checkLowWater();
