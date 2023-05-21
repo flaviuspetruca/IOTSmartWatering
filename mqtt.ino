@@ -2,9 +2,9 @@
 #include <ArduinoJson.h>
 #include <PubSubClient.h>
 
-const char* mqtt_server = "public.mqtthq.com";
+const char* mqtt_server = "broker.hivemq.com";
 PubSubClient client(espClient);
-char* topic = "proiect/smp/";
+char* topic = "proiect/smp";
 const int dataInterval = 100000;
 int sentDataIndex = 0;
 

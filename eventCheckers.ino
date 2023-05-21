@@ -78,12 +78,13 @@ void stopWateringChecker() {
 
 //Function to check mode in order to change built in led state
 void modeChecker() {
+  Serial.println(currentMode);
   if (currentMode == AUTOMATIC) {
     digitalWrite(LED_BUILTIN, LOW);
-    digitalWrite(modeLED, LOW);
+    digitalWrite(modeLED, HIGH);
   } else {
     digitalWrite(LED_BUILTIN, HIGH);
-    digitalWrite(modeLED, HIGH);
+    digitalWrite(modeLED, LOW);
   }
 }
 
