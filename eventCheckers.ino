@@ -9,6 +9,8 @@ unsigned long lastWaterCheck = 0;
 const int wateringInterval = 5000;
 const int waterLedInterval = 1500;
 const int mlPerSec = 30;
+const int LOW_THRESHOLD_WATER = 250;
+const int HIGH_THRESHOLD_LIGHT = 400;
 
 // Times
 unsigned long lastFlashBtnPress = 0;
@@ -27,7 +29,7 @@ void checkPossibleWater() {
     return;
   }
   // check if moisture is low and time passed after last watering, for the sensor to get the data
-  if (lastMoistureValue < 250 && lastMoistureValue != -1 && millis() - lastWateringTime >=  betweenWatering && lastLightValue < 400) { 
+  if (lastMoistureValue < LOW_THRESHOLD_WATER && lastMoistureValue != -1 && millis() - lastWateringTime >=  betweenWatering && lastLightValue < HIGH_THRESHOLD_LIGHT) { 
     if (!wateringState){
       water();
     } 
@@ -50,7 +52,7 @@ void checkDecreasingWaterLevel() {
   }
 }
 void checkLowWater() {
-   if (currentWaterLeft < 200) {
+   if (currentWaterLeft < LOW_THRESHOLD_WATER) {
       waterLedState = true;
       if (nrOfScreens <= 3) {
         nrOfScreens++;

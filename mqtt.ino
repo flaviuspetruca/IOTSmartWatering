@@ -4,7 +4,7 @@
 
 const char* mqtt_server = "public.mqtthq.com";
 PubSubClient client(espClient);
-char* topic = "topic1234/flavius";
+char* topic = "proiect/smp/";
 const int dataInterval = 100000;
 int sentDataIndex = 0;
 
