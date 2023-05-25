@@ -71,7 +71,7 @@ void stopWateringChecker() {
   if (temperature <= 20) {
     temperatureDelay = 1;
   }
-  if (millis() - startedWatering >= wateringInterval - temperatureDelay && wateringState && currentMode == AUTOMATIC) {
+  if (((millis() - startedWatering >= wateringInterval - temperatureDelay && currentMode == AUTOMATIC) || currentWaterLeft == 0) && wateringState) {
     stopWatering();
   }
 }

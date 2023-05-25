@@ -5,7 +5,7 @@ int getLight() {
     digitalWrite(selPin, LOW);
     int light = analogRead(analogPin);
     lastLightValue = light;
-    return light;
+    return light / 10;
   }
   return -1;
 }
@@ -26,19 +26,15 @@ int getSoilMoisture(bool refresh) {
     lastSoilMeasureTime = millis();
     lastMoistureValue = avg;
     checkPossibleWater();
-    return avg;
+    return avg / 10;
   }
   return -1;
 }
 
 int getTemperature() {
-  Serial.print(F("Temperature = "));
-  Serial.print(bmp.readTemperature());
-  Serial.println(" *C");
   return bmp.readTemperature();
 }
 
 int getPressure() {
-  Serial.println(bmp.readPressure());
   return bmp.readPressure();
 }

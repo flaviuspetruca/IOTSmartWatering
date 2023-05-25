@@ -13,7 +13,6 @@ void water() {
 }
 
 void stopWatering() {
-  //myservo.write(initialPositionServo);
   digitalWrite(relayPin, LOW);
   wateringState = false;
   lastWateringTime = millis();
